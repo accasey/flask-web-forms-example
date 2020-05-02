@@ -1,11 +1,13 @@
 {% extends 'base.html' %}
-{% set active_page = 'new_item' %}
-{% block title %}Add new item - {% endblock %}
+{% set active_page = 'edit_item' %}
+{% block title %}Edit item - {% endblock %}
 
 {% block content %}
 <div class="row">
     <div class="col-lg-7 offset-lg-2 my-5">
-        <h1>Add new item</h1><hr>
+        <h1>
+            Edit item: {{ item.title }}
+        </h1><hr>
         <form method="post" action="{{ url_for('new_item') }}">
             {{ form.hidden_tag() }}
             <div class="form-group">
