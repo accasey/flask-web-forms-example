@@ -2,8 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, g, flash, 
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileRequired
 from wtforms import StringField, TextAreaField, SubmitField, SelectField, DecimalField, FileField
-from wtforms.validators import DataRequired, InputRequired, Length
-from werkzeug.utils import secure_filename
+from wtforms.validators import DataRequired, InputRequired, Length, ValidationError
+from werkzeug.utils import secure_filename, escape, unescape
 import sqlite3
 import os
 import pdb
@@ -39,14 +39,90 @@ class ItemForm(FlaskForm):
     ])
 
 
+# Validator option 1
+def belongs_to_category(message):
+    message = message
+
+    def _belongs_to_category(form, field):
+        c = get_db().cursor()
+        c.execute("""SELECT COUNT(*) FROM subcategories
+                     WHERE id = ? AND category_id = ?""",
+                  (field.data, form.category.data))
+        exists = c.fetchone()[0]
+        if not exists:
+            raise ValidationError(message)
+
+    return _belongs_to_category
+
+
+# Validator option 2 a generic class
+class BelongsToOtherFieldOption():
+    def __init__(self, table, belongs_to, foreign_key=None, message=None):
+        if not table:
+            raise AttributeError("""
+            The BelongsToOtherFieldOption validator needs the table parameter""")
+        if not belongs_to:
+            raise AttributeError("""
+            The BelongsToOtherFieldOption validator needs the belongs_to parameter""")
+
+        self.table = table
+        self.belongs_to = belongs_to
+
+        if not foreign_key:
+            foreign_key = belongs_to + "_id"
+        if not message:
+            message = "The chosen option is not valid"
+
+        self.foreign_key = foreign_key
+        self.message = message
+
+    def __call__(self, form, field):
+        c = get_db().cursor()
+        try:
+            c.execute(f"""SELECT COUNT(*) FROM {self.table}
+                           WHERE id = ? AND {self.foreign_key} = ?""",
+                      (field.data, getattr(form, self.belongs_to).data))
+        except Exception as e:
+            raise AttributeError(f"""
+            The passed parameters are not correct {e}""")
+
+        exists = c.fetchone()[0]
+        if not exists:
+            raise ValidationError(self.message)
+
+
 class NewItemForm(ItemForm):
     """The first argument of StringField defines the label of the field."""
 
     # Use coerce to cast to str to int
     category = SelectField(""
                            "Category", coerce=int)
-    subcategory = SelectField("Subcategory", coerce=int)
+    # subcategory = SelectField("Subcategory", coerce=int)
+    # subcategory = SelectField("Subcategory", coerce=int, validators=[belongs_to_category("Custom error message")])
+    subcategory = SelectField("Subcategory",
+                              coerce=int,
+                              validators=[BelongsToOtherFieldOption(
+                                  table="subcategories",
+                                  belongs_to="category",
+                                  message="The subcategory does not belong to that category")
+                              ])
     submit = SubmitField("Submit")
+
+    # You can define custom inline validators
+    # The name must begin with validate_[fieldname_to_be_validated]
+
+    # You could scope this function outside of the class
+    # and then call it with the validators keyword argument on the
+    # field, e.g. validators=[belongs_to_category]
+    # This way, you can also name the function whatever you like.
+    # def validate_subcategory(form, field):
+    #     c = get_db().cursor()
+    #     c.execute("""SELECT COUNT(*) FROM subcategories
+    #                  WHERE id = ? AND category_id = ?""",
+    #               (field.data, form.category.data))
+    #     exists = c.fetchone()[0]
+    #     if not exists:
+    #         raise ValidationError("Choice does not belong to that category.")
 
 
 class EditItemForm(ItemForm):
@@ -98,8 +174,8 @@ def edit_item(item_id):
                       SET title = ?, description = ?, price = ?, image = ?
                       WHERE id = ?""",
                       (
-                          form.title.data,
-                          form.description.data,
+                          escape(form.title.data),
+                          escape(form.description.data),
                           float(form.price.data),
                           filename,
                           item_id
@@ -110,7 +186,7 @@ def edit_item(item_id):
 
         print('after validate_on_submit')
         form.title.data = item['title']
-        form.description.data = item['description']
+        form.description.data = unescape(item['description'])
         form.price.data = item['price']
 
         if form.errors:
@@ -210,7 +286,7 @@ def home():
 
         if form.title.data.strip():
             filter_queries.append("i.title LIKE ?")
-            parameters.append("%" + form.title.data + "%")
+            parameters.append("%" + escape(form.title.data) + "%")
 
         if form.category.data:
             filter_queries.append("i.category_id = ?")
@@ -280,7 +356,6 @@ def new_item():
     # pdb.set_trace()
     # if request.method == 'POST':
     if form.validate_on_submit() and form.image.validate(form, extra_validators=(FileRequired(),)):
-
         filename = save_image_upload(form.image)
 
         # Process the form data
@@ -288,8 +363,8 @@ def new_item():
                     (title, description, price, image, category_id, subcategory_id)
                     VALUES(?,?,?,?,?,?)""",
                   (
-                      form.title.data,
-                      form.description.data,
+                      escape(form.title.data),
+                      escape(form.description.data),
                       float(form.price.data),
                       filename,
                       form.category.data,
