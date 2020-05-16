@@ -1,9 +1,11 @@
-from flask import Flask, render_template, request, redirect, url_for, g, flash, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, g, flash, send_from_directory, jsonify
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileRequired
 from wtforms import StringField, TextAreaField, SubmitField, SelectField, DecimalField, FileField
 from wtforms.validators import DataRequired, InputRequired, Length, ValidationError
+from wtforms.widgets import Input
 from werkzeug.utils import secure_filename, escape, unescape
+from markupsafe import Markup
 import sqlite3
 import os
 import pdb
@@ -18,6 +20,30 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
 app.config["IMAGE_UPLOADS"] = os.path.join(basedir, 'uploads')
 
 
+class PriceInput(Input):
+    input_type = "number"
+
+    def __call__(self, field, **kwargs):
+        kwargs.setdefault("id", field.id)
+        kwargs.setdefault("type", self.input_type)
+        kwargs.setdefault("step", "0.01")
+        if "value" not in kwargs:
+            kwargs["value"] = field._value()
+        if "required" not in kwargs and "required" in getattr(field, "flags", []):
+            kwargs["required"] = True
+        return Markup("""
+            <div class="input-group mb-3">
+                <div class="input-group-prepend">
+                    <span class="input-group-text">$</span>
+                </div>
+                <input %s>
+            </div>""" % self.html_params(name=field.name, **kwargs))
+
+
+class PriceField(DecimalField):
+    widget = PriceInput()
+
+
 class ItemForm(FlaskForm):
     # The InputRequired will add the required attribute to the element
     # But if you remove that through the DEV tools, then this message will come in
@@ -27,7 +53,8 @@ class ItemForm(FlaskForm):
         DataRequired("The title cannot be blank"),
         Length(min=5, max=20, message="The title must be between 5 and 20 characters")
     ])
-    price = DecimalField("Price")
+    # price = DecimalField("Price", widget=PriceInput())
+    price = PriceField("Price")
     description = TextAreaField("Description", validators=[
         InputRequired("The description is required"),
         DataRequired("The description cannot be blank"),
@@ -141,6 +168,16 @@ class FilterForm(FlaskForm):
     submit = SubmitField("Filter")
 
 
+@app.route("/category/<int:category_id>")
+def category(category_id):
+    c = get_db().cursor()
+    c.execute("""SELECT id, name FROM subcategories
+                 WHERE category_id = ?""",
+              (category_id,))
+    subcategories = c.fetchall()
+
+    return jsonify(subcategories=subcategories)
+
 @app.route("/item/<int:item_id>/edit", methods=["GET", "POST"])
 def edit_item(item_id):
     conn = get_db()
@@ -189,8 +226,8 @@ def edit_item(item_id):
         form.description.data = unescape(item['description'])
         form.price.data = item['price']
 
-        if form.errors:
-            flash(f"{form.errors}", "danger")
+        # if form.errors:
+        #     flash(f"{form.errors}", "danger")
 
         return render_template("edit_item.html", item=item, form=form)
 
@@ -268,7 +305,7 @@ def home():
     categories.insert(0, (0, "---"))
     form.category.choices = categories
 
-    c.execute("SELECT id, name FROM subcategories WHERE category_id = ?", (1,))
+    c.execute("SELECT id, name FROM subcategories")
     subcategories = c.fetchall()
     subcategories.insert(0, (0, "---"))
     form.subcategory.choices = subcategories
@@ -346,10 +383,7 @@ def new_item():
     # [(1, 'Food'), (2, 'Technology'), (3, 'Books')]
     form.category.choices = categories
 
-    c.execute("""SELECT id, name FROM subcategories
-                WHERE category_id = ?""",
-              (1,)
-              )
+    c.execute("SELECT id, name FROM subcategories")
     subcategories = c.fetchall()
     form.subcategory.choices = subcategories
 
@@ -375,8 +409,8 @@ def new_item():
         flash(f"Item {request.form['title']} has been successfully submitted", "success")
         return redirect(url_for('home'))
 
-    if form.errors:
-        flash(f"{form.errors}", "danger")
+    # if form.errors:
+    #     flash(f"{form.errors}", "danger")
     return render_template("new_item.html", form=form)
 
 
