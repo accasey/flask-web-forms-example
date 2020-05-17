@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, g, flash, send_from_directory, jsonify
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileRequired
-from wtforms import StringField, TextAreaField, SubmitField, SelectField, DecimalField, FileField
+from wtforms import StringField, TextAreaField, SubmitField, SelectField, DecimalField, FileField, HiddenField
 from wtforms.validators import DataRequired, InputRequired, Length, ValidationError
 from wtforms.widgets import Input
 from werkzeug.utils import secure_filename, escape, unescape
@@ -168,6 +168,13 @@ class FilterForm(FlaskForm):
     submit = SubmitField("Filter")
 
 
+class NewCommentForm(FlaskForm):
+    content = TextAreaField("Comment",
+                            validators=[InputRequired("Input is required"), DataRequired("Data is required")])
+    item_id = HiddenField(validators=[DataRequired()])
+    submit = SubmitField("Submit")
+
+
 @app.route("/category/<int:category_id>")
 def category(category_id):
     c = get_db().cursor()
@@ -177,6 +184,7 @@ def category(category_id):
     subcategories = c.fetchall()
 
     return jsonify(subcategories=subcategories)
+
 
 @app.route("/item/<int:item_id>/edit", methods=["GET", "POST"])
 def edit_item(item_id):
@@ -287,10 +295,53 @@ def item(item_id):
         item = dict()
 
     if item:
+        comments_from_db = c.execute("""SELECT content FROM comments
+                    WHERE item_id = ? ORDER BY id DESC""",
+                                     (item_id,)
+                                     )
+        comments = []
+        for row in comments_from_db:
+            comment = {
+                "content": row[0]
+            }
+            comments.append(comment)
+
+        commentForm = NewCommentForm()
+        commentForm.item_id.data = item_id
+
         deleteItemForm = DeleteItemForm()
 
-        return render_template("item.html", item=item, deleteItemForm=deleteItemForm)
+        return render_template("item.html", item=item, commentForm=commentForm,
+                               deleteItemForm=deleteItemForm, comments=comments)
     return redirect(url_for('home'))
+
+
+@app.route("/comment/new", methods=["POST"])
+def new_comment():
+    conn = get_db()
+    c = conn.cursor()
+    form = NewCommentForm()
+
+    try:
+        is_ajax = int(request.form["ajax"])
+    except:
+        is_ajax = 0
+
+    if form.validate_on_submit():
+        c.execute("""INSERT INTO comments (content, item_id)
+                     VALUES (?, ?)""",
+                    (
+                        escape(form.content.data),
+                        form.item_id.data
+                    )
+        )
+        conn.commit()
+
+        if is_ajax:
+            return render_template("_comment.html", content=form.content.data)
+    if is_ajax:
+        return "Content is required", 400
+    return redirect(url_for('item', item_id=form.item_id.data))
 
 
 @app.route("/")
@@ -316,6 +367,11 @@ def home():
                INNER JOIN categories AS c ON i.category_id = c.id
                INNER JOIN subcategories AS s ON i.subcategory_id = s.id
                """
+
+    try:
+        is_ajax = int(request.args["ajax"])
+    except:
+        is_ajax = 0
 
     if form.validate():
         filter_queries = []
@@ -364,6 +420,8 @@ def home():
         }
         items.append(item)
 
+    if is_ajax:
+        return render_template("_items.html", items=items)
     return render_template("home.html", items=items, form=form)
 
 
